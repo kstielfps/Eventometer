@@ -1,7 +1,7 @@
 """
 Simple health check and monitoring views.
 """
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 
@@ -9,7 +9,11 @@ from django.views.decorators.csrf import csrf_exempt
 @csrf_exempt
 @require_http_methods(["GET", "HEAD"])
 def health_check(request):
-    """Health check endpoint for Railway and monitoring."""
+    """Health check endpoint for Railway and monitoring.
+    This is also served by HealthCheckMiddleware before any other middleware,
+    to ensure it always responds 200 even if ALLOWED_HOSTS or SSL redirect
+    would block the request.
+    """
     return JsonResponse({
         "status": "healthy",
         "service": "eventometer",
