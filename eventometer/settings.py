@@ -25,6 +25,16 @@ if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = 'DENY'
 
+# CSRF trusted origins — required when behind a reverse proxy (Railway, etc.)
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://*.up.railway.app,https://*.railway.app',
+    cast=Csv()
+)
+
+# Tell Django it's behind a HTTPS reverse proxy
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 # ──────────────────────────────────────────────
 # Application definition
 # ──────────────────────────────────────────────
