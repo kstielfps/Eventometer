@@ -15,5 +15,5 @@ COPY . .
 # Collect static files
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
-# Default: run web server
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# Run migrations, start bot in background, then start gunicorn
+CMD ["sh", "-c", "python manage.py migrate && python manage.py runbot & gunicorn eventometer.wsgi --bind 0.0.0.0:${PORT:-8000} --workers 2"]
