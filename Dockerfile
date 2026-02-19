@@ -12,8 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Collect static files
+# Make start script executable
+RUN chmod +x start.sh
+
+# Collect static files (may fail without env vars, that's ok)
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
-# Run migrations, start bot in background, then start gunicorn
-CMD ["sh", "-c", "python manage.py migrate && python manage.py runbot & gunicorn eventometer.wsgi --bind 0.0.0.0:${PORT:-8000} --workers 2"]
+EXPOSE ${PORT:-8000}
+
+CMD ["./start.sh"]
