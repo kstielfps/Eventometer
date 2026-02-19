@@ -1,0 +1,11 @@
+{% extends "admin/change_list.html" %}
+{% load i18n %}
+
+{% block object-tools-items %}
+    <li>
+        <a href="{% url 'admin:core_event_import_vatsim' %}" class="button" style="background-color: #417690;">
+            🔄 Importar Eventos do VATSIM
+        </a>
+    </li>
+    {{ block.super }}
+{% endblock %}

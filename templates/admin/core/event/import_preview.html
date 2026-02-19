@@ -1,0 +1,246 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block title %}Importar Eventos do VATSIM{% endblock %}
+
+{% block breadcrumbs %}
+    <div class="breadcrumbs">
+        <a href="{% url 'admin:index' %}">Início</a>
+        &rsaquo; <a href="{% url 'admin:core_event_changelist' %}">Eventos</a>
+        &rsaquo; Importar do VATSIM
+    </div>
+{% endblock %}
+
+{% block content %}
+<style>
+    .import-container { max-width: 1200px; }
+    .filter-bar {
+        background: #f8f8f8;
+        padding: 15px 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        display: flex;
+        gap: 15px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .filter-bar label { font-weight: bold; font-size: 13px; }
+    .filter-bar input[type="date"] {
+        padding: 6px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+    .filter-bar button {
+        padding: 7px 16px;
+        background: #417690;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+    }
+    .filter-bar button:hover { background: #205067; }
+    .filter-bar .clear-link { font-size: 12px; color: #666; margin-left: 5px; }
+
+    .events-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+    }
+    .events-table th {
+        background: #417690;
+        color: white;
+        padding: 10px 12px;
+        text-align: left;
+        font-size: 13px;
+    }
+    .events-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #eee;
+        font-size: 13px;
+        vertical-align: middle;
+    }
+    .events-table tr:hover { background: #f5f9fc; }
+    .events-table tr.already-imported { background: #f0f0f0; opacity: 0.6; }
+    .events-table tr.already-imported:hover { background: #e8e8e8; }
+
+    .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: bold;
+    }
+    .badge-imported { background: #dff0d8; color: #3c763d; }
+    .badge-new { background: #d9edf7; color: #31708f; }
+
+    .banner-thumb {
+        max-height: 35px;
+        border-radius: 3px;
+    }
+
+    .actions-bar {
+        margin-top: 20px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+    .actions-bar button {
+        padding: 10px 24px;
+        background: #28a745;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+    }
+    .actions-bar button:hover { background: #218838; }
+    .actions-bar button:disabled { background: #ccc; cursor: not-allowed; }
+
+    .select-controls {
+        margin: 10px 0;
+        font-size: 12px;
+    }
+    .select-controls a {
+        color: #417690;
+        cursor: pointer;
+        margin-right: 10px;
+    }
+
+    .summary { color: #666; font-size: 13px; margin-bottom: 10px; }
+</style>
+
+<div class="import-container">
+    <h2>🔄 Importar Eventos do VATSIM</h2>
+    <p class="summary">
+        Mostrando <strong>{{ total_count }}</strong> evento(s) da API VATSIM.
+        Selecione os eventos que deseja importar.
+    </p>
+
+    <!-- Date filter -->
+    <form method="get" class="filter-bar">
+        <label for="date_from">De:</label>
+        <input type="date" name="date_from" id="date_from" value="{{ date_from }}">
+
+        <label for="date_to">Até:</label>
+        <input type="date" name="date_to" id="date_to" value="{{ date_to }}">
+
+        <button type="submit">🔍 Filtrar</button>
+        {% if date_from or date_to %}
+            <a href="{% url 'admin:core_event_import_vatsim' %}" class="clear-link">✕ Limpar filtros</a>
+        {% endif %}
+    </form>
+
+    {% if events %}
+    <!-- Import form -->
+    <form method="post" action="{% url 'admin:core_event_import_vatsim_confirm' %}" id="import-form">
+        {% csrf_token %}
+
+        <div class="select-controls">
+            <a onclick="selectAll(true)">✅ Selecionar todos novos</a>
+            <a onclick="selectAll(false)">⬜ Desmarcar todos</a>
+            <span id="selected-count" style="margin-left: 15px; color: #333; font-weight: bold;"></span>
+        </div>
+
+        <table class="events-table">
+            <thead>
+                <tr>
+                    <th style="width: 30px;"></th>
+                    <th>Banner</th>
+                    <th>Nome do Evento</th>
+                    <th>Data</th>
+                    <th>Horário (UTC)</th>
+                    <th>Organizadores</th>
+                    <th>Aeroportos</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in events %}
+                <tr class="{% if event.already_imported %}already-imported{% endif %}">
+                    <td>
+                        <input
+                            type="checkbox"
+                            name="selected_events"
+                            value="{{ event.vatsim_id }}"
+                            class="event-checkbox"
+                            {% if event.already_imported %}disabled title="Já importado"{% endif %}
+                            onchange="updateCount()"
+                        >
+                    </td>
+                    <td>
+                        {% if event.banner %}
+                            <img src="{{ event.banner }}" class="banner-thumb" alt="">
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ event.name }}</strong>
+                        <br><small style="color: #999;">ID: {{ event.vatsim_id }}</small>
+                    </td>
+                    <td>{{ event.start_time|date:"d/m/Y" }}</td>
+                    <td>{{ event.start_time|date:"H:i" }}z – {{ event.end_time|date:"H:i" }}z</td>
+                    <td>{{ event.organisers }}</td>
+                    <td><code>{{ event.airports }}</code></td>
+                    <td>
+                        {% if event.already_imported %}
+                            <span class="badge badge-imported">✓ Já importado</span>
+                        {% else %}
+                            <span class="badge badge-new">Novo</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="actions-bar">
+            <button type="submit" id="import-btn" disabled>
+                📥 Importar Selecionados
+            </button>
+            <a href="{% url 'admin:core_event_changelist' %}" style="margin-left: 10px; color: #666;">
+                ← Voltar para lista de eventos
+            </a>
+        </div>
+    </form>
+    {% else %}
+        <p style="padding: 20px; background: #fff3cd; border-radius: 6px; color: #856404;">
+            ⚠️ Nenhum evento encontrado para o período selecionado.
+        </p>
+        <a href="{% url 'admin:core_event_changelist' %}" style="color: #417690;">
+            ← Voltar para lista de eventos
+        </a>
+    {% endif %}
+</div>
+
+<script>
+    function selectAll(checked) {
+        document.querySelectorAll('.event-checkbox:not(:disabled)').forEach(cb => {
+            cb.checked = checked;
+        });
+        updateCount();
+    }
+
+    function updateCount() {
+        const checked = document.querySelectorAll('.event-checkbox:checked').length;
+        const counter = document.getElementById('selected-count');
+        const btn = document.getElementById('import-btn');
+
+        if (checked > 0) {
+            counter.textContent = checked + ' evento(s) selecionado(s)';
+            btn.disabled = false;
+            btn.textContent = '📥 Importar ' + checked + ' Evento(s)';
+        } else {
+            counter.textContent = '';
+            btn.disabled = true;
+            btn.textContent = '📥 Importar Selecionados';
+        }
+    }
+
+    // Initialize count on page load
+    updateCount();
+</script>
+{% endblock %}

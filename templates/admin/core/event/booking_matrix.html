@@ -1,0 +1,354 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrastyle %}
+<style>
+    .booking-matrix {
+        margin: 20px 0;
+        overflow-x: auto;
+    }
+    
+    .matrix-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--body-bg, white);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .matrix-table th {
+        background: #417690;
+        color: white;
+        padding: 12px 8px;
+        text-align: center;
+        font-weight: 600;
+        border: 1px solid #2d5468;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+    }
+    
+    .matrix-table th.position-header {
+        text-align: left;
+        min-width: 150px;
+    }
+    
+    .matrix-table td {
+        padding: 10px 8px;
+        border: 1px solid var(--border-color, #ddd);
+        text-align: center;
+        vertical-align: middle;
+        min-width: 120px;
+    }
+    
+    .matrix-table td.position-cell {
+        text-align: left;
+        font-weight: 600;
+        background: var(--darkened-bg, #f8f9fa);
+    }
+    
+    /* Dark mode support for status colors */
+    .status-empty {
+        background: var(--darkened-bg, #f0f0f0);
+        color: var(--body-quiet-color, #999);
+    }
+    
+    .status-pending {
+        background: #856404;
+        color: #fff3cd;
+        font-weight: 600;
+    }
+    
+    .status-locked {
+        background: #155724;
+        color: #d4edda;
+        font-weight: 600;
+    }
+    
+    .status-rejected {
+        background: #721c24;
+        color: #f8d7da;
+    }
+    
+    .matrix-cell-content {
+        cursor: pointer;
+    }
+    
+    .matrix-cell-content a {
+        color: inherit !important;
+        text-decoration: underline;
+    }
+    
+    .event-info {
+        background: var(--darkened-bg, white);
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid var(--border-color, transparent);
+    }
+    
+    .event-info h2 {
+        margin: 0 0 10px 0;
+        color: var(--body-fg, #417690);
+    }
+    
+    .event-meta {
+        color: var(--body-quiet-color, #666);
+        font-size: 14px;
+    }
+    
+    .legend {
+        background: var(--darkened-bg, white);
+        padding: 15px;
+        margin-bottom: 20px;
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border: 1px solid var(--border-color, transparent);
+        color: var(--body-fg, inherit);
+    }
+    
+    .legend-item {
+        display: inline-block;
+        margin-right: 20px;
+        margin-bottom: 5px;
+    }
+    
+    .legend-box {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        margin-right: 5px;
+        border: 1px solid #ddd;
+        vertical-align: middle;
+    }
+    
+    .back-button {
+        margin-bottom: 15px;
+    }
+    
+    .applicants-row {
+        background: var(--darkened-bg, #f0f8ff);
+        border-top: 2px solid var(--border-color, #ddd) !important;
+    }
+    
+    .applicants-cell {
+        padding: 15px !important;
+        text-align: left !important;
+        font-size: 13px;
+    }
+    
+    .applicant-item {
+        display: inline-block;
+        margin-right: 20px;
+        margin-bottom: 8px;
+        padding: 6px 10px;
+        background: var(--body-bg, white);
+        border: 1px solid var(--border-color, #ddd);
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-decoration: none;
+        color: inherit;
+    }
+    
+    .applicant-item:hover {
+        background: #417690;
+        border-color: #417690;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    .applicant-item:hover .applicant-name,
+    .applicant-item:hover .applicant-blocks {
+        color: white !important;
+    }
+    
+    .applicant-item.selected {
+        background: #d4edda;
+        border-color: #28a745;
+        border-width: 2px;
+        cursor: default;
+    }
+    
+    .applicant-item.selected:hover {
+        background: #d4edda;
+        border-color: #28a745;
+        transform: none;
+    }
+    
+    .applicant-item.selected .applicant-name,
+    .applicant-item.selected:hover .applicant-name,
+    .applicant-item.selected .applicant-blocks,
+    .applicant-item.selected:hover .applicant-blocks {
+        color: #155724 !important;
+    }
+    
+    .applicant-item.rejected {
+        background: #f8d7da;
+        border-color: #dc3545;
+        border-width: 2px;
+        opacity: 0.8;
+    }
+    
+    .applicant-item.rejected:hover {
+        background: #f8d7da;
+        border-color: #dc3545;
+        opacity: 1;
+    }
+    
+    .applicant-item.rejected .applicant-name,
+    .applicant-item.rejected:hover .applicant-name,
+    .applicant-item.rejected .applicant-blocks,
+    .applicant-item.rejected:hover .applicant-blocks {
+        color: #721c24 !important;
+    }
+    
+    .applicant-name {
+        font-weight: 600;
+        color: var(--body-fg, #333);
+    }
+    
+    .applicant-blocks {
+        color: var(--body-quiet-color, #666);
+        font-size: 12px;
+        margin-left: 8px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <div class="back-button">
+        <a href="{% url 'admin:core_event_change' event.pk %}" class="button">← Voltar ao Evento</a>
+    </div>
+    
+    <div class="event-info">
+        <h2>{{ event.name }}</h2>
+        <div class="event-meta">
+            <strong>ID VATSIM:</strong> {{ event.vatsim_id }} | 
+            <strong>Horário:</strong> {{ event.start_time|date:"d/m/Y H:i" }}z – {{ event.end_time|date:"H:i" }}z | 
+            <strong>Status:</strong> {{ event.get_status_display }} |
+            <strong>Duração do bloco:</strong> {{ event.block_duration_minutes }} minutos
+        </div>
+    </div>
+    
+    <div class="legend">
+        <strong>Legenda:</strong>
+        <div class="legend-item">
+            <span class="legend-box status-empty"></span>
+            Sem aplicações
+        </div>
+        <div class="legend-item">
+            <span class="legend-box status-pending"></span>
+            Aplicações pendentes
+        </div>
+        <div class="legend-item">
+            <span class="legend-box status-locked"></span>
+            Usuário selecionado/confirmado
+        </div>
+        <div class="legend-item">
+            <span class="legend-box status-rejected"></span>
+            Apenas rejeitadas
+        </div>
+    </div>
+    
+    <div class="booking-matrix">
+        {% if matrix_data %}
+        <table class="matrix-table">
+            <thead>
+                <tr>
+                    <th class="position-header">Posição</th>
+                    {% for block in blocks %}
+                    <th>
+                        Bloco {{ block.block_number }}<br>
+                        <small>{{ block.start_time|date:"H:i" }}–{{ block.end_time|date:"H:i" }}z</small>
+                    </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in matrix_data %}
+                <tr>
+                    <td class="position-cell">
+                        {{ row.position.callsign }}<br>
+                        <small style="color: var(--body-quiet-color, #666);">Mín: {{ row.position.position_template.get_min_rating_display }}</small>
+                    </td>
+                    {% for cell in row.cells %}
+                    <td class="{{ cell.css_class }}">
+                        <div class="matrix-cell-content">
+                            {% if cell.status == "empty" %}
+                                —
+                            {% elif cell.status == "locked" %}
+                                ✅ {{ cell.display }}
+                            {% elif cell.status == "pending" %}
+                                ⏳ {{ cell.display }}
+                            {% elif cell.status == "rejected" %}
+                                ❌ {{ cell.display }}
+                            {% endif %}
+                            
+                            {% if cell.applications %}
+                            <div style="margin-top: 5px; font-size: 11px;">
+                                <a href="{% url 'admin:core_bookingapplication_changelist' %}?event_position__id__exact={{ cell.position_id }}&time_block__id__exact={{ cell.block_id }}" 
+                                   target="_blank" 
+                                   style="color: inherit; text-decoration: underline;">
+                                    Ver detalhes
+                                </a>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% if row.applicants %}
+                <tr class="applicants-row">
+                    <td colspan="{{ blocks|length|add:1 }}" class="applicants-cell">
+                        <strong>Aplicantes ({{ row.applicants|length }}):</strong>
+                        <small style="color: var(--body-quiet-color, #666); margin-left: 10px;">(Clique para selecionar)</small>
+                        {% for applicant in row.applicants %}
+                        {% if applicant.is_selected %}
+                        <div class="applicant-item selected" title="Já selecionado">
+                            <span class="applicant-name">✅ {{ applicant.user.discord_username }}</span>
+                            <span class="applicant-blocks">• {{ applicant.locked_count }}/{{ applicant.block_count }} selecionado{{ applicant.locked_count|pluralize }} ({% for block in applicant.blocks %}B{{ block.block_number }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>
+                        </div>
+                        {% elif applicant.rejected_count == applicant.block_count %}
+                        <div class="applicant-item rejected" title="Todas as aplicações rejeitadas">
+                            <span class="applicant-name">❌ {{ applicant.user.discord_username }}</span>
+                            <span class="applicant-blocks">• {{ applicant.block_count }} bloco{{ applicant.block_count|pluralize }} rejeitado{{ applicant.block_count|pluralize }} ({% for block in applicant.blocks %}B{{ block.block_number }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>
+                        </div>
+                        {% else %}
+                        <a href="{% url 'admin:core_event_select_applicant' event.pk row.position.pk applicant.user.pk %}" 
+                           class="applicant-item"
+                           onclick="return confirm('Selecionar {{ applicant.user.discord_username }} para todos os {{ applicant.block_count }} bloco(s)?\n\nIsso irá:\n- Marcar como SELECIONADO (aguardando confirmação)\n- Rejeitar todas as outras aplicações para estes blocos\n- Enviar notificações automaticamente');"
+                           title="Clique para selecionar este aplicante">
+                            <span class="applicant-name">{{ applicant.user.discord_username }}</span>
+                            <span class="applicant-blocks">• {{ applicant.block_count }} bloco{{ applicant.block_count|pluralize }} ({% for block in applicant.blocks %}B{{ block.block_number }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>
+                        </a>
+                        {% endif %}
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>Nenhuma posição ou bloco configurado para este evento.</p>
+        {% endif %}
+    </div>
+    
+    <div class="back-button" style="margin-top: 20px;">
+        <a href="{% url 'admin:core_event_change' event.pk %}" class="button">← Voltar ao Evento</a>
+        <a href="{% url 'admin:core_bookingapplication_changelist' %}?event_position__event_icao__event__id__exact={{ event.pk }}" 
+           class="button" target="_blank">
+            Ver Todas as Aplicações
+        </a>
+        <a href="{% url 'admin:core_event_send_final_confirmations' event.pk %}" 
+           class="button" 
+           style="background: #28a745; margin-left: 10px;"
+           onclick="return confirm('Enviar CONFIRMAÇÃO FINAL para todos os usuários confirmados?\n\nIsso irá atualizar o status para FULL_CONFIRMED e enviar notificações finais.');"
+           title="Enviar confirmação final para todos os usuários já confirmados">
+            ✅ Enviar Confirmações Finais
+        </a>
+    </div>
+</div>
+{% endblock %}
