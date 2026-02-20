@@ -1339,6 +1339,58 @@ class AdminCog(commands.Cog):
             ephemeral=True,
         )
 
+    @discord.slash_command(name="apagar_mensagem", description="[Admin] Apagar uma mensagem do bot pelo ID")
+    @is_admin()
+    async def apagar_mensagem(
+        self,
+        ctx: discord.ApplicationContext,
+        message_id: discord.Option(
+            str,
+            description="ID da mensagem do bot para apagar",
+            required=True,
+        ),
+        canal: discord.Option(
+            discord.TextChannel,
+            description="Canal onde a mensagem está (padrão: canal atual)",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            required=False,
+        ) = None,
+    ):
+        """Delete a bot message by its ID."""
+        await ctx.defer(ephemeral=True)
+        target_channel = canal or ctx.channel
+
+        try:
+            msg_id = int(message_id)
+        except ValueError:
+            await ctx.followup.send("❌ ID inválido. Use o ID numérico da mensagem.", ephemeral=True)
+            return
+
+        try:
+            message = await target_channel.fetch_message(msg_id)
+        except discord.NotFound:
+            await ctx.followup.send(
+                f"❌ Mensagem `{message_id}` não encontrada em {target_channel.mention}.",
+                ephemeral=True,
+            )
+            return
+        except discord.Forbidden:
+            await ctx.followup.send("❌ Sem permissão para acessar essa mensagem.", ephemeral=True)
+            return
+
+        if message.author.id != ctx.bot.user.id:
+            await ctx.followup.send("❌ Essa mensagem não foi enviada pelo bot. Só posso apagar minhas próprias mensagens.", ephemeral=True)
+            return
+
+        try:
+            await message.delete()
+            await ctx.followup.send(f"✅ Mensagem `{message_id}` apagada de {target_channel.mention}.", ephemeral=True)
+            logger.info("Admin %s deleted bot message %s in #%s", ctx.author, message_id, target_channel.name)
+        except discord.Forbidden:
+            await ctx.followup.send("❌ Sem permissão para apagar essa mensagem.", ephemeral=True)
+        except discord.HTTPException as e:
+            await ctx.followup.send(f"❌ Erro ao apagar mensagem: {e}", ephemeral=True)
+
     @discord.slash_command(name="status_evento", description="[Admin] Ver status de um evento")
     @is_admin()
     async def status_evento(self, ctx: discord.ApplicationContext):
