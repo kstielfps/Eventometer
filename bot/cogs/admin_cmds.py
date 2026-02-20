@@ -746,7 +746,7 @@ class BlockDurationModal(discord.ui.Modal):
 class AnnounceEventSelectView(discord.ui.View):
     """Dropdown for admin to select which open event to announce."""
 
-    def __init__(self, events: list[Event], channel: discord.TextChannel):
+    def __init__(self, events: list[Event], channel: discord.abc.GuildChannel):
         super().__init__(timeout=120)
         self.events = {str(e.pk): e for e in events}
         self.channel = channel
@@ -1320,6 +1320,7 @@ class AdminCog(commands.Cog):
         canal: discord.Option(
             discord.TextChannel,
             description="Canal onde o evento será anunciado",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
             required=False,
         ) = None,
     ):
