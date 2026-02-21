@@ -849,13 +849,11 @@ class EventBookingButtonView(discord.ui.View):
         discord_id = str(interaction.user.id)
         discord_name = str(interaction.user)
 
-        # Resolve user
-        user = await get_user_by_discord_id(discord_id)
+        # Always resolve via VATSIM API to keep rating up-to-date
+        user, _ = await AsyncVATSIMService.get_or_create_user(discord_id, discord_name)
         if not user:
-            user, _ = await AsyncVATSIMService.get_or_create_user(discord_id, discord_name)
-            if not user:
-                await interaction.response.send_message(MSGS["err_no_vatsim"], ephemeral=True)
-                return
+            await interaction.response.send_message(MSGS["err_no_vatsim"], ephemeral=True)
+            return
 
         event = await get_event(self.event_id)
         if not event or event.status != EventStatus.OPEN:

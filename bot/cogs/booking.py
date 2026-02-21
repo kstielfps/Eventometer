@@ -586,17 +586,13 @@ class BookingCog(commands.Cog):
         discord_id = str(ctx.author.id)
         discord_name = str(ctx.author)
 
-        # Try to get existing user
-        user = await get_user_by_discord_id(discord_id)
-
+        # Always resolve via VATSIM API to keep rating up-to-date
+        user, created = await AsyncVATSIMService.get_or_create_user(
+            discord_id, discord_name,
+        )
         if not user:
-            # Resolve via VATSIM API
-            user, created = await AsyncVATSIMService.get_or_create_user(
-                discord_id, discord_name,
-            )
-            if not user:
-                await ctx.respond(MSGS["err_no_vatsim"], ephemeral=True)
-                return
+            await ctx.respond(MSGS["err_no_vatsim"], ephemeral=True)
+            return
 
         # Get open events
         events = await get_open_events()
