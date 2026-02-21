@@ -41,13 +41,13 @@ STAT_KEY_TO_RATING = {
 def rating_from_stats(stats: dict) -> int:
     """
     Determine the highest ATC rating from VATSIM stats.
-    A rating is considered achieved if the user has > 1 hour on it.
+    A rating is considered achieved if the user has any time on it (> 0 hours).
     Returns the ATCRating integer value (highest found) or OBS (1).
     """
     highest = ATCRating.OBS
     for key in RATING_STAT_KEYS:
         hours = stats.get(key, 0)
-        if hours and float(hours) > 1:
+        if hours and float(hours) > 0:
             candidate = STAT_KEY_TO_RATING[key]
             if candidate > highest:
                 highest = candidate
