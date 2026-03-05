@@ -31,15 +31,26 @@ from core.vatsim import VATSIMService
 class EventPositionInline(admin.TabularInline):
     model = EventPosition
     extra = 1
-    fields = ["position_template", "callsign_display"]
-    readonly_fields = ["callsign_display"]
+    fields = ["position_template", "callsign_display", "allowed_blocks_display"]
+    readonly_fields = ["callsign_display", "allowed_blocks_display"]
     autocomplete_fields = ["position_template"]
-    
+    show_change_link = True
+
     def callsign_display(self, obj):
         if obj and obj.pk:
             return obj.callsign
         return "—"
     callsign_display.short_description = "Callsign Completo"
+
+    def allowed_blocks_display(self, obj):
+        if obj and obj.pk:
+            blocks = obj.allowed_time_blocks.all()
+            if not blocks.exists():
+                return "Todos os blocos"
+            labels = [f"B{b.block_number}" for b in blocks.order_by("block_number")]
+            return ", ".join(labels)
+        return "—"
+    allowed_blocks_display.short_description = "Blocos Restritos"
 
 
 class EventICAOInline(admin.TabularInline):
@@ -641,9 +652,42 @@ class EventICAOAdmin(admin.ModelAdmin):
 
 @admin.register(EventPosition)
 class EventPositionAdmin(admin.ModelAdmin):
-    list_display = ("callsign_display", "event_display", "min_rating_display")
+    list_display = ("callsign_display", "event_display", "min_rating_display", "allowed_blocks_display")
     list_filter = ("event_icao__event", "position_template")
     search_fields = ("event_icao__icao", "position_template__name")
+    filter_horizontal = ("allowed_time_blocks",)
+    fieldsets = (
+        ("Posição", {
+            "fields": ("event_icao", "position_template"),
+        }),
+        ("Restrição de Blocos de Horário", {
+            "fields": ("allowed_time_blocks",),
+            "description": (
+                "Selecione quais blocos de horário estão disponíveis para esta posição. "
+                "<strong>Se nenhum bloco for selecionado, todos os blocos do evento ficarão disponíveis.</strong> "
+                "Use isso para posições que só fazem sentido em parte do evento "
+                "(ex: DEL/GND apenas nas primeiras horas de um voo longo)."
+            ),
+        }),
+    )
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "allowed_time_blocks":
+            from core.models import TimeBlock
+            # Try to limit to blocks of the same event as the position being edited
+            object_id = request.resolver_match.kwargs.get("object_id")
+            if object_id:
+                try:
+                    from core.models import EventPosition
+                    pos = EventPosition.objects.select_related("event_icao__event").get(pk=object_id)
+                    kwargs["queryset"] = TimeBlock.objects.filter(
+                        event=pos.event_icao.event
+                    ).order_by("block_number")
+                except EventPosition.DoesNotExist:
+                    pass
+            else:
+                kwargs["queryset"] = TimeBlock.objects.none()
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
 
     def callsign_display(self, obj):
         return obj.callsign
@@ -656,6 +700,14 @@ class EventPositionAdmin(admin.ModelAdmin):
     def min_rating_display(self, obj):
         return obj.position_template.get_min_rating_display()
     min_rating_display.short_description = "Rating Mínimo"
+
+    def allowed_blocks_display(self, obj):
+        blocks = obj.allowed_time_blocks.all()
+        if not blocks.exists():
+            return "Todos os blocos"
+        labels = [f"Bloco {b.block_number}" for b in blocks.order_by("block_number")]
+        return ", ".join(labels)
+    allowed_blocks_display.short_description = "Blocos Permitidos"
 
 
 @admin.register(TimeBlock)

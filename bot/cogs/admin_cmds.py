@@ -63,11 +63,14 @@ def get_available_positions(event_id: int):
         ApplicationStatus.FULL_CONFIRMED,
     ]
     
-    all_positions = EventPosition.objects.filter(
-        event_icao__event_id=event_id
-    ).select_related("event_icao", "position_template")
+    all_positions = list(
+        EventPosition.objects.filter(
+            event_icao__event_id=event_id
+        ).select_related("event_icao", "position_template")
+        .prefetch_related("allowed_time_blocks")
+    )
     
-    # Get total time blocks for this event
+    # Get total time blocks for this event (used as fallback for unrestricted positions)
     total_blocks = TimeBlock.objects.filter(event_id=event_id).count()
     
     if total_blocks == 0:
@@ -76,12 +79,16 @@ def get_available_positions(event_id: int):
     # Get positions that have at least one slot without confirmation
     available = {}
     for pos in all_positions:
+        allowed = pos.allowed_time_blocks.all()
+        # How many blocks does this position actually span?
+        effective_total = allowed.count() if allowed.exists() else total_blocks
+        
         taken_slots = BookingApplication.objects.filter(
             event_position=pos,
             status__in=taken_statuses,
         ).count()
         
-        if taken_slots < total_blocks:
+        if taken_slots < effective_total:
             available[pos.pk] = pos
     
     return available
@@ -121,11 +128,13 @@ def is_event_fully_booked(event_id: int):
         ApplicationStatus.FULL_CONFIRMED,
     ]
     
-    all_positions = EventPosition.objects.filter(
-        event_icao__event_id=event_id
+    all_positions = list(
+        EventPosition.objects.filter(
+            event_icao__event_id=event_id
+        ).prefetch_related("allowed_time_blocks")
     )
     
-    if not all_positions.exists():
+    if not all_positions:
         return False
     
     # Get total time blocks for this event
@@ -135,12 +144,15 @@ def is_event_fully_booked(event_id: int):
         return False
     
     for pos in all_positions:
+        allowed = pos.allowed_time_blocks.all()
+        effective_total = allowed.count() if allowed.exists() else total_blocks
+        
         taken_slots = BookingApplication.objects.filter(
             event_position=pos,
             status__in=taken_statuses,
         ).count()
         
-        if taken_slots < total_blocks:
+        if taken_slots < effective_total:
             # At least one position has available slots
             return False
     

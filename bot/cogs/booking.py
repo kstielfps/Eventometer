@@ -59,12 +59,13 @@ def get_positions_for_event(event_id: int, min_rating: int, selected_block_ids: 
         ApplicationStatus.FULL_CONFIRMED,
     ]
     
-    # Get all positions matching rating
+    # Get all positions matching rating, including their block restrictions
     all_positions = list(
         EventPosition.objects.filter(
             event_icao__event_id=event_id,
             position_template__min_rating__lte=min_rating,
         ).select_related("event_icao", "position_template")
+        .prefetch_related("allowed_time_blocks")
     )
     
     if not all_positions or not selected_block_ids:
@@ -79,12 +80,19 @@ def get_positions_for_event(event_id: int, min_rating: int, selected_block_ids: 
         ).values_list("event_position_id", "time_block_id")
     )
     
-    # Filter: keep only positions that have at least 1 available block
+    # Filter: keep positions that have at least 1 allowed + available block
     available_positions = []
     for position in all_positions:
+        allowed_block_ids = set(position.allowed_time_blocks.values_list("pk", flat=True))
+        # Determine which selected blocks are valid for this position
+        relevant_blocks = [
+            bid for bid in selected_block_ids
+            if not allowed_block_ids or bid in allowed_block_ids
+        ]
+        # Check if at least one relevant block is not taken
         has_available_block = any(
-            (position.pk, block_id) not in taken_pairs
-            for block_id in selected_block_ids
+            (position.pk, bid) not in taken_pairs
+            for bid in relevant_blocks
         )
         if has_available_block:
             available_positions.append(position)
@@ -105,33 +113,46 @@ def get_time_blocks(event_id: int, min_rating: int):
     # Get all blocks
     all_blocks = list(TimeBlock.objects.filter(event_id=event_id).order_by("block_number"))
     
-    # Get all positions matching rating
+    # Get all positions matching rating, with their block restrictions
     accessible_positions = list(
         EventPosition.objects.filter(
             event_icao__event_id=event_id,
             position_template__min_rating__lte=min_rating,
-        ).values_list("pk", flat=True)
+        ).prefetch_related("allowed_time_blocks")
     )
     
     if not accessible_positions:
         return []
     
+    accessible_position_ids = [p.pk for p in accessible_positions]
+    
+    # Build a map: position_id -> set of allowed block IDs (empty = all blocks allowed)
+    position_allowed = {
+        p.pk: set(p.allowed_time_blocks.values_list("pk", flat=True))
+        for p in accessible_positions
+    }
+    
     # Get (position_id, block_id) pairs that are taken
     taken_pairs = set(
         BookingApplication.objects.filter(
-            event_position_id__in=accessible_positions,
+            event_position_id__in=accessible_position_ids,
             time_block__event_id=event_id,
             status__in=taken_statuses,
         ).values_list("event_position_id", "time_block_id")
     )
     
-    # Filter: keep only blocks that have at least 1 available position
+    # Filter: keep only blocks that have at least 1 available + allowed position
     available_blocks = []
     for block in all_blocks:
-        has_available_position = any(
-            (pos_id, block.pk) not in taken_pairs
-            for pos_id in accessible_positions
-        )
+        has_available_position = False
+        for position in accessible_positions:
+            allowed = position_allowed[position.pk]
+            # Skip if this block is not allowed for this position
+            if allowed and block.pk not in allowed:
+                continue
+            if (position.pk, block.pk) not in taken_pairs:
+                has_available_position = True
+                break
         if has_available_position:
             available_blocks.append(block)
     
@@ -148,8 +169,9 @@ def get_all_time_blocks(event_id: int):
 def create_applications(user: VATSIMUser, positions: list[EventPosition], block_ids: list[int]):
     """Create booking applications for multiple positions across multiple blocks.
     
-    Only creates applications for (position, block) combinations that don't already
-    have locked/confirmed applications.
+    Only creates applications for (position, block) combinations that:
+    - Don't already have locked/confirmed applications
+    - Respect the position's allowed_time_blocks restriction (if any)
     """
     # Statuses that mean the slot is taken
     taken_statuses = [
@@ -166,10 +188,20 @@ def create_applications(user: VATSIMUser, positions: list[EventPosition], block_
             status__in=taken_statuses,
         ).values_list("event_position_id", "time_block_id")
     )
+
+    # Build allowed blocks map for each position (empty = all allowed)
+    position_allowed = {
+        p.pk: set(p.allowed_time_blocks.values_list("pk", flat=True))
+        for p in positions
+    }
     
     created = 0
     for position in positions:
+        allowed = position_allowed[position.pk]
         for block_id in block_ids:
+            # Skip if this block is not allowed for this position
+            if allowed and block_id not in allowed:
+                continue
             # Skip if this combination is already taken by a confirmed user
             if (position.pk, block_id) in taken_pairs:
                 continue
@@ -435,10 +467,17 @@ class PositionSelectView(discord.ui.View):
         options = []
         for pos in positions[:25]:
             min_rating_name = ATCRating(pos.min_rating).label
+            # Show block restriction hint if position has limited blocks
+            allowed_blocks = list(pos.allowed_time_blocks.all())
+            if allowed_blocks:
+                block_nums = sorted(b.block_number for b in allowed_blocks)
+                blocks_hint = f" · Blocos {', '.join(str(n) for n in block_nums)}"
+            else:
+                blocks_hint = ""
             options.append(discord.SelectOption(
                 label=pos.callsign,
                 value=str(pos.pk),
-                description=f"Mínimo: {min_rating_name}",
+                description=f"Mínimo: {min_rating_name}{blocks_hint}"[:100],
             ))
 
         select = discord.ui.Select(

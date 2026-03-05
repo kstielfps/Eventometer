@@ -258,6 +258,16 @@ class EventPosition(models.Model):
         PositionTemplate, on_delete=models.CASCADE,
         verbose_name="Posição",
     )
+    allowed_time_blocks = models.ManyToManyField(
+        "TimeBlock",
+        blank=True,
+        related_name="restricted_positions",
+        verbose_name="Blocos Permitidos",
+        help_text=(
+            "Deixe em branco para permitir todos os blocos do evento. "
+            "Se preenchido, apenas os blocos selecionados estarão disponíveis para esta posição."
+        ),
+    )
 
     class Meta:
         verbose_name = "Posição do Evento"
