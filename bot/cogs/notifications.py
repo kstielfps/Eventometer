@@ -193,22 +193,23 @@ class AdminNotificationDeleteView(discord.ui.View):
     @discord.ui.button(label="✓ Confirmar Leitura", style=discord.ButtonStyle.green)
     async def delete_message(self, interaction: discord.Interaction):
         """Delete the notification message and optionally the channel."""
+        # Always defer first to acknowledge the interaction
+        await interaction.response.defer(ephemeral=True)
+        
         try:
+            # Delete the message
             await interaction.message.delete()
             
             # If this was sent in a fallback admin channel, delete the channel after confirmation
             if self.channel_id and str(interaction.channel.id) == self.channel_id:
-                await interaction.channel.send("Deletando este canal em 2 segundos...")
-                await asyncio.sleep(2)
-                await interaction.channel.delete(reason="Admin confirmou notificação")
-            else:
-                await interaction.response.defer(ephemeral=True)
+                try:
+                    await interaction.channel.send("Deletando este canal em 2 segundos...")
+                    await asyncio.sleep(2)
+                    await interaction.channel.delete(reason="Admin confirmou notificação")
+                except Exception as e:
+                    logger.error(f"Failed to delete fallback channel: {e}")
         except Exception as e:
             logger.error(f"Failed to delete admin notification message: {e}")
-            try:
-                await interaction.response.defer(ephemeral=True)
-            except:
-                pass
 
 
 class NotificationsCog(commands.Cog):
