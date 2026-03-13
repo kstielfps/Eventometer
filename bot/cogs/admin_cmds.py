@@ -8,6 +8,7 @@ import logging
 import discord
 from discord.ext import commands
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 
 from django.conf import settings
 
@@ -214,6 +215,17 @@ def get_event_by_vatsim_id(vatsim_id: int):
         return Event.objects.get(vatsim_id=vatsim_id)
     except Event.DoesNotExist:
         return None
+
+
+@sync_to_async
+def get_active_events():
+    """Get all events that are not archived and not in the past."""
+    now = timezone.now()
+    return list(
+        Event.objects.exclude(status=EventStatus.ARCHIVED)
+        .filter(end_time__gte=now)
+        .order_by("-start_time")[:25]
+    )
 
 
 @sync_to_async
@@ -696,6 +708,66 @@ def select_reserve_user(user_cid: int, position_id: int, block_id: int, event_id
 # ══════════════════════════════════════════════
 
 
+class ICAOModal(discord.ui.Modal):
+    """Modal to ask admin for ICAOs to add to an event."""
+    
+    def __init__(self, event: Event):
+        super().__init__(title="Adicionar ICAOs ao Evento")
+        self.event = event
+        
+        self.add_item(
+            discord.ui.InputText(
+                label="ICAOs (separados por vírgula)",
+                placeholder="Ex: SBBR,SBGR,SBSP",
+                required=True,
+                max_length=200,
+            )
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            icaos_input = self.children[0].value.strip()
+            if not icaos_input:
+                await interaction.response.send_message(
+                    "❌ Nenhum ICAO fornecido.",
+                    ephemeral=True,
+                )
+                return
+            
+            # Parse ICAOs
+            icao_list = [icao.strip().upper() for icao in icaos_input.split(",") if icao.strip()]
+            
+            if not icao_list:
+                await interaction.response.send_message("❌ Nenhum ICAO válido fornecido.", ephemeral=True)
+                return
+            
+            # Create ICAOs
+            created = []
+            existing = []
+            
+            for icao in icao_list:
+                icao_obj, was_created = await create_event_icao(self.event.pk, icao)
+                if icao_obj:
+                    if was_created:
+                        created.append(icao)
+                    else:
+                        existing.append(icao)
+            
+            response = f"✅ ICAOs processados para **{self.event.name}**\n\n"
+            if created:
+                response += f"✨ **Criados:** {', '.join(created)}\n"
+            if existing:
+                response += f"♻️ **Já existiam:** {', '.join(existing)}\n"
+            
+            response += f"\n💡 **Próximo passo:** Use `/adicionar_posicao` para adicionar posições aos ICAOs."
+            
+            await interaction.response.send_message(response, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"Erro ao adicionar ICAOs: {e}", exc_info=True)
+            await interaction.response.send_message(f"❌ Erro: {str(e)}", ephemeral=True)
+
+
 class BlockDurationModal(discord.ui.Modal):
     """Modal to ask admin for block duration in minutes after importing an event."""
     
@@ -753,6 +825,41 @@ class BlockDurationModal(discord.ui.Modal):
                 f"❌ Erro ao configurar blocos: {str(e)}",
                 ephemeral=True,
             )
+
+
+class EventSelectionView(discord.ui.View):
+    """Generic dropdown for admin to select an active event."""
+
+    def __init__(self, events: list[Event], callback):
+        super().__init__(timeout=120)
+        self.events = {str(e.pk): e for e in events}
+        self.callback_func = callback
+
+        options = [
+            discord.SelectOption(
+                label=e.name[:100],
+                value=str(e.pk),
+                description=f"{e.start_time:%d/%m %H:%M}z",
+            )
+            for e in events[:25]
+        ]
+
+        select = discord.ui.Select(
+            placeholder="Escolha o evento...",
+            options=options,
+            custom_id="admin_event_select",
+        )
+        select.callback = self.on_select
+        self.add_item(select)
+
+    async def on_select(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        event_id = int(interaction.data["values"][0])
+        event = await get_event(event_id)
+        if not event:
+            await interaction.followup.send("❌ Evento não encontrado.", ephemeral=True)
+            return
+        await self.callback_func(interaction, event)
 
 
 class AnnounceEventSelectView(discord.ui.View):
@@ -1491,53 +1598,30 @@ class AdminCog(commands.Cog):
 
     @discord.slash_command(name="adicionar_icao", description="[Admin] Adicionar ICAOs a um evento")
     @is_admin()
-    async def adicionar_icao(
-        self,
-        ctx: discord.ApplicationContext,
-        event_id: discord.Option(int, description="ID do evento VATSIM", required=True),
-        icaos: discord.Option(str, description="ICAOs separados por vírgula (ex: SBBR,SBGR,SBSP)", required=True),
-    ):
+    async def adicionar_icao(self, ctx: discord.ApplicationContext):
         """Add ICAOs to an event."""
         await ctx.defer(ephemeral=True)
         
         try:
-            event = await get_event_by_vatsim_id(event_id)
-            if not event:
+            events = await get_active_events()
+            if not events:
                 await ctx.respond(
-                    f"❌ Evento {event_id} não encontrado.\n"
-                    f"Importe-o primeiro com `/importar event_id:{event_id}`",
+                    "❌ Nenhum evento ativo disponível.\n"
+                    "Eventos arquivados ou com data/hora passada não são exibidos.",
                     ephemeral=True,
                 )
                 return
-            
-            # Parse ICAOs
-            icao_list = [icao.strip().upper() for icao in icaos.split(",") if icao.strip()]
-            
-            if not icao_list:
-                await ctx.respond("❌ Nenhum ICAO válido fornecido.", ephemeral=True)
-                return
-            
-            # Create ICAOs
-            created = []
-            existing = []
-            
-            for icao in icao_list:
-                icao_obj, was_created = await create_event_icao(event.pk, icao)
-                if icao_obj:
-                    if was_created:
-                        created.append(icao)
-                    else:
-                        existing.append(icao)
-            
-            response = f"✅ ICAOs processados para **{event.name}**\n\n"
-            if created:
-                response += f"✨ **Criados:** {', '.join(created)}\n"
-            if existing:
-                response += f"♻️ **Já existiam:** {', '.join(existing)}\n"
-            
-            response += f"\n💡 **Próximo passo:** Use `/adicionar_posicao event_id:{event_id}` para adicionar posições aos ICAOs."
-            
-            await ctx.respond(response, ephemeral=True)
+
+            async def show_icao_modal(interaction: discord.Interaction, event: Event):
+                modal = ICAOModal(event)
+                await interaction.response.send_modal(modal)
+
+            view = EventSelectionView(events, show_icao_modal)
+            await ctx.respond(
+                "🏢 **Selecione o evento para adicionar ICAOs:**",
+                view=view,
+                ephemeral=True,
+            )
             
         except Exception as e:
             logger.error(f"Erro ao adicionar ICAOs: {e}", exc_info=True)
@@ -1663,118 +1747,137 @@ class AdminCog(commands.Cog):
         description="[Admin] Ver todas as aplicações de um evento",
     )
     @is_admin()
-    async def aplicacoes(
-        self,
-        ctx: discord.ApplicationContext,
-        event_id: discord.Option(int, description="ID do evento VATSIM", required=True),
-    ):
+    async def aplicacoes(self, ctx: discord.ApplicationContext):
         """View all applications for an event, grouped by position + block."""
         await ctx.defer(ephemeral=True)
 
-        event = await get_event_by_vatsim_id(event_id)
-        if not event:
-            await ctx.respond(f"❌ Evento {event_id} não encontrado.", ephemeral=True)
+        events = await get_active_events()
+        if not events:
+            await ctx.respond(
+                "❌ Nenhum evento ativo disponível.\n"
+                "Eventos arquivados ou com data/hora passada não são exibidos.",
+                ephemeral=True,
+            )
             return
 
-        all_apps = await get_all_applications_for_event(event.pk)
-        if not all_apps:
-            await ctx.respond(f"📭 Nenhuma aplicação para **{event.name}**.", ephemeral=True)
-            return
+        async def show_applications(interaction: discord.Interaction, event: Event):
+            all_apps = await get_all_applications_for_event(event.pk)
+            if not all_apps:
+                await interaction.followup.send(
+                    f"📭 Nenhuma aplicação para **{event.name}**.",
+                    ephemeral=True,
+                )
+                return
 
-        # Filter to only show relevant statuses (exclude rejected/cancelled)
-        shown_statuses = {"pending", "locked", "confirmed", "full_confirmed"}
-        apps = [a for a in all_apps if a.status in shown_statuses]
+            # Filter to only show relevant statuses (exclude rejected/cancelled)
+            shown_statuses = {"pending", "locked", "confirmed", "full_confirmed"}
+            apps = [a for a in all_apps if a.status in shown_statuses]
 
-        from collections import defaultdict
+            from collections import defaultdict
 
-        by_position = defaultdict(lambda: defaultdict(list))
-        for app in apps:
-            callsign = app.event_position.callsign
-            block_label = (
-                f"Bloco {app.time_block.block_number} "
-                f"({app.time_block.start_time:%H:%M}–{app.time_block.end_time:%H:%M}z)"
-            )
-            status_emoji = {
-                "pending": "🟡",
-                "locked": "🔒",
-                "confirmed": "✅",
-                "full_confirmed": "✅✅",
-            }.get(app.status, "❓")
-            by_position[callsign][block_label].append(
-                f"{status_emoji} {app.user.discord_username} ({app.user.get_rating_display()})"
-            )
+            by_position = defaultdict(lambda: defaultdict(list))
+            for app in apps:
+                callsign = app.event_position.callsign
+                block_label = (
+                    f"Bloco {app.time_block.block_number} "
+                    f"({app.time_block.start_time:%H:%M}–{app.time_block.end_time:%H:%M}z)"
+                )
+                status_emoji = {
+                    "pending": "🟡",
+                    "locked": "🔒",
+                    "confirmed": "✅",
+                    "full_confirmed": "✅✅",
+                }.get(app.status, "❓")
+                by_position[callsign][block_label].append(
+                    f"{status_emoji} {app.user.discord_username} ({app.user.get_rating_display()})"
+                )
 
-        lines = [f"📋 **Aplicações – {event.name}**\n"]
-        for callsign in sorted(by_position.keys()):
-            lines.append(f"\n🏢 **{callsign}**")
-            for block_label in sorted(by_position[callsign].keys()):
-                users = by_position[callsign][block_label]
-                lines.append(f"  {block_label}:")
-                for u in users:
-                    lines.append(f"    {u}")
+            lines = [f"📋 **Aplicações – {event.name}**\n"]
+            for callsign in sorted(by_position.keys()):
+                lines.append(f"\n🏢 **{callsign}**")
+                for block_label in sorted(by_position[callsign].keys()):
+                    users = by_position[callsign][block_label]
+                    lines.append(f"  {block_label}:")
+                    for u in users:
+                        lines.append(f"    {u}")
 
-        unique_users = len({app.user.cid for app in apps})
-        pending = sum(1 for a in apps if a.status == "pending")
-        locked = sum(1 for a in apps if a.status == "locked")
-        confirmed = sum(1 for a in apps if a.status == "confirmed")
-        full_confirmed = sum(1 for a in apps if a.status == "full_confirmed")
-        rejected = sum(1 for a in all_apps if a.status == "rejected")
+            unique_users = len({app.user.cid for app in apps})
+            pending = sum(1 for a in apps if a.status == "pending")
+            locked = sum(1 for a in apps if a.status == "locked")
+            confirmed = sum(1 for a in apps if a.status == "confirmed")
+            full_confirmed = sum(1 for a in apps if a.status == "full_confirmed")
+            rejected = sum(1 for a in all_apps if a.status == "rejected")
 
-        lines.append(f"\n📊 **Total exibido:** {len(apps)} aplicações de {unique_users} usuários")
-        lines.append(f"🟡 Pendentes: {pending} | 🔒 Selecionados: {locked} | ✅ Confirmados: {confirmed} | ✅✅ Confirmação Final: {full_confirmed}")
-        if rejected > 0:
-            lines.append(f"*(❌ {rejected} rejeitados — não exibidos)*")
+            lines.append(f"\n📊 **Total exibido:** {len(apps)} aplicações de {unique_users} usuários")
+            lines.append(f"🟡 Pendentes: {pending} | 🔒 Selecionados: {locked} | ✅ Confirmados: {confirmed} | ✅✅ Confirmação Final: {full_confirmed}")
+            if rejected > 0:
+                lines.append(f"*(❌ {rejected} rejeitados — não exibidos)*")
 
-        response = "\n".join(lines)
+            response = "\n".join(lines)
 
-        # Discord 2 000-char limit — split if needed
-        if len(response) <= 2000:
-            await ctx.respond(response, ephemeral=True)
-        else:
-            chunks, current = [], ""
-            for line in lines:
-                if len(current) + len(line) + 1 > 1900:
+            # Discord 2 000-char limit — split if needed
+            if len(response) <= 2000:
+                await interaction.followup.send(response, ephemeral=True)
+            else:
+                chunks, current = [], ""
+                for line in lines:
+                    if len(current) + len(line) + 1 > 1900:
+                        chunks.append(current)
+                        current = line
+                    else:
+                        current += ("\n" + line) if current else line
+                if current:
                     chunks.append(current)
-                    current = line
-                else:
-                    current += ("\n" + line) if current else line
-            if current:
-                chunks.append(current)
-            await ctx.respond(chunks[0], ephemeral=True)
-            for chunk in chunks[1:]:
-                await ctx.followup.send(chunk, ephemeral=True)
+                await interaction.followup.send(chunks[0], ephemeral=True)
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk, ephemeral=True)
+
+        view = EventSelectionView(events, show_applications)
+        await ctx.respond(
+            "📋 **Selecione o evento para ver as aplicações:**",
+            view=view,
+            ephemeral=True,
+        )
 
     @discord.slash_command(
         name="selecionar",
         description="[Admin] Selecionar controladores para posições de um evento",
     )
     @is_admin()
-    async def selecionar(
-        self,
-        ctx: discord.ApplicationContext,
-        event_id: discord.Option(int, description="ID do evento VATSIM", required=True),
-    ):
+    async def selecionar(self, ctx: discord.ApplicationContext):
         """Interactive flow to select users for positions."""
         await ctx.defer(ephemeral=True)
 
-        event = await get_event_by_vatsim_id(event_id)
-        if not event:
-            await ctx.respond(f"❌ Evento {event_id} não encontrado.", ephemeral=True)
-            return
-
-        positions = await get_positions_with_pending_apps(event.pk)
-        if not positions:
+        events = await get_active_events()
+        if not events:
             await ctx.respond(
-                f"⚠️ Nenhuma aplicação pendente para **{event.name}**.\n"
-                f"Todas as posições já foram preenchidas ou não há aplicações.",
+                "❌ Nenhum evento ativo disponível.\n"
+                "Eventos arquivados ou com data/hora passada não são exibidos.",
                 ephemeral=True,
             )
             return
 
-        view = SelectionFlowView(event, positions, self.bot)
+        async def show_selection_flow(interaction: discord.Interaction, event: Event):
+            positions = await get_positions_with_pending_apps(event.pk)
+            if not positions:
+                await interaction.followup.send(
+                    f"⚠️ Nenhuma aplicação pendente para **{event.name}**.\n"
+                    f"Todas as posições já foram preenchidas ou não há aplicações.",
+                    ephemeral=True,
+                )
+                return
+
+            view = SelectionFlowView(event, positions, self.bot)
+            await interaction.followup.send(
+                f"🎯 **Seleção de Controladores – {event.name}**\n\n"
+                f"Selecione a posição para começar:",
+                view=view,
+                ephemeral=True,
+            )
+
+        view = EventSelectionView(events, show_selection_flow)
         await ctx.respond(
-            f"🎯 **Seleção de Controladores – {event.name}**\n\n"
-            f"Selecione a posição para começar:",
+            "🎯 **Selecione o evento para começar a seleção:**",
             view=view,
             ephemeral=True,
         )
