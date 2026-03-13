@@ -172,6 +172,8 @@ def create_applications(user: VATSIMUser, positions: list[EventPosition], block_
     Only creates applications for (position, block) combinations that:
     - Don't already have locked/confirmed applications
     - Respect the position's allowed_time_blocks restriction (if any)
+    
+    Returns a tuple: (number_created, list_of_created_apps)
     """
     # Statuses that mean the slot is taken
     taken_statuses = [
@@ -196,6 +198,7 @@ def create_applications(user: VATSIMUser, positions: list[EventPosition], block_
     }
     
     created = 0
+    created_apps = []
     for position in positions:
         allowed = position_allowed[position.pk]
         for block_id in block_ids:
@@ -206,7 +209,7 @@ def create_applications(user: VATSIMUser, positions: list[EventPosition], block_
             if (position.pk, block_id) in taken_pairs:
                 continue
                 
-            _, was_created = BookingApplication.objects.get_or_create(
+            app, was_created = BookingApplication.objects.get_or_create(
                 user=user,
                 event_position=position,
                 time_block_id=block_id,
@@ -214,10 +217,13 @@ def create_applications(user: VATSIMUser, positions: list[EventPosition], block_
             )
             if was_created:
                 created += 1
+                created_apps.append(app)
 
     # Update user stats
     user.total_applications += created
     user.save(update_fields=["total_applications"])
+    
+    return created, created_apps
 
     return created
 
@@ -498,7 +504,7 @@ class PositionSelectView(discord.ui.View):
             return
 
         # Create applications for all selected positions
-        created = await create_applications(self.user, selected_positions, self.selected_block_ids)
+        created, created_apps = await create_applications(self.user, selected_positions, self.selected_block_ids)
 
         if created == 0:
             await interaction.response.edit_message(
@@ -525,6 +531,24 @@ class PositionSelectView(discord.ui.View):
             blocks=", ".join(block_labels),
         )
         await interaction.response.edit_message(content=msg, embed=embed, view=None)
+
+        # Send admin notification about new application
+        try:
+            admin_msg = (
+                f"📋 **Novaplicação Recebida**\n\n"
+                f"👤 **Controlador:** {self.user.discord_username} (CID: {self.user.cid})"
+                f" - {self.user.get_rating_display()}\n"
+                f"🎉 **Evento:** {self.event.name}\n"
+                f"📍 **Posições:** {', '.join(position_labels)}\n"
+                f"⏰ **Blocos:** {', '.join(block_labels)}\n"
+                f"📊 **Aplicações Criadas:** {created}"
+            )
+            # Get notifications cog and send notification
+            notifications_cog = interaction.client.get_cog("NotificationsCog")
+            if notifications_cog:
+                await notifications_cog.send_admin_notification(admin_msg, self.event.name)
+        except Exception as e:
+            logger.warning(f"Failed to send admin notification: {e}")
 
 
 class ConfirmView(discord.ui.View):
@@ -564,24 +588,33 @@ class ConfirmView(discord.ui.View):
             try:
                 app = BookingApplication.objects.get(pk=self.application_id)
             except BookingApplication.DoesNotExist:
-                return None, None, None
+                return None, None, None, None
 
             fallback_channel_id = app.fallback_channel_id
             event_id = app.event_position.event_icao.event_id
+            event_name = app.event_position.event_icao.event.name
+            old_status = app.status
+            user_info = {
+                "username": app.user.discord_username,
+                "cid": app.user.cid,
+                "rating": app.user.get_rating_display(),
+                "position": app.event_position.callsign,
+                "block": f"{app.time_block.start_time:%H:%M}–{app.time_block.end_time:%H:%M}z",
+            }
 
             if app.status == ApplicationStatus.LOCKED:
                 app.status = ApplicationStatus.CONFIRMED
                 app.fallback_channel_id = None  # Clear fallback channel ID
                 app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
-                return "confirmed", fallback_channel_id, event_id
+                return "confirmed", fallback_channel_id, event_id, (event_name, old_status, user_info)
             elif app.status == ApplicationStatus.CONFIRMED:
                 app.status = ApplicationStatus.FULL_CONFIRMED
                 app.fallback_channel_id = None  # Clear fallback channel ID
                 app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
-                return "full_confirmed", fallback_channel_id, event_id
-            return "already", fallback_channel_id, event_id
+                return "full_confirmed", fallback_channel_id, event_id, (event_name, old_status, user_info)
+            return "already", fallback_channel_id, event_id, (event_name, old_status, user_info)
 
-        result, fallback_channel_id, event_id = await update_status()
+        result, fallback_channel_id, event_id, admin_info = await update_status()
 
         if result == "confirmed":
             await interaction.response.edit_message(content=MSGS["confirmed"], view=None)
@@ -604,6 +637,24 @@ class ConfirmView(discord.ui.View):
             except Exception as e:
                 logger.warning(f"Failed to update announcement message: {e}")
         
+        # Send admin notification about confirmation
+        if result in ["confirmed", "full_confirmed"] and admin_info:
+            try:
+                event_name, old_status, user_info = admin_info
+                status_text = "Confirmação Final" if result == "full_confirmed" else "Confirmado"
+                admin_msg = (
+                    f"✅ **Controlador {status_text}**\n\n"
+                    f"👤 **Controlador:** {user_info['username']} (CID: {user_info['cid']}) - {user_info['rating']}\n"
+                    f"🎉 **Evento:** {event_name}\n"
+                    f"📍 **Posição:** {user_info['position']}\n"
+                    f"⏰ **Bloco:** {user_info['block']}"
+                )
+                notifications_cog = interaction.client.get_cog("NotificationsCog")
+                if notifications_cog:
+                    await notifications_cog.send_admin_notification(admin_msg, event_name)
+            except Exception as e:
+                logger.warning(f"Failed to send admin notification: {e}")
+        
         # Delete the fallback channel if this confirmation was in one
         if fallback_channel_id and interaction.channel:
             try:
@@ -624,24 +675,34 @@ class ConfirmView(discord.ui.View):
             try:
                 app = BookingApplication.objects.get(pk=self.application_id)
             except BookingApplication.DoesNotExist:
-                return None, None, None
+                return None, None, None, None
 
             fallback_channel_id = app.fallback_channel_id
             event_id = app.event_position.event_icao.event_id
+            event_name = app.event_position.event_icao.event.name
+            old_status = app.status
+            was_confirmed = app.status in [ApplicationStatus.LOCKED, ApplicationStatus.CONFIRMED, ApplicationStatus.FULL_CONFIRMED]
+            user_info = {
+                "username": app.user.discord_username,
+                "cid": app.user.cid,
+                "rating": app.user.get_rating_display(),
+                "position": app.event_position.callsign,
+                "block": f"{app.time_block.start_time:%H:%M}–{app.time_block.end_time:%H:%M}z",
+            }
 
             if app.status == ApplicationStatus.LOCKED:
                 app.status = ApplicationStatus.CANCELLED
                 app.fallback_channel_id = None
                 app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
-                return "cancelled", fallback_channel_id, event_id
+                return "cancelled", fallback_channel_id, event_id, (event_name, old_status, user_info, was_confirmed)
             elif app.status == ApplicationStatus.CONFIRMED:
                 app.status = ApplicationStatus.CANCELLED
                 app.fallback_channel_id = None
                 app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
-                return "cancelled", fallback_channel_id, event_id
-            return "already", fallback_channel_id, event_id
+                return "cancelled", fallback_channel_id, event_id, (event_name, old_status, user_info, was_confirmed)
+            return "already", fallback_channel_id, event_id, (event_name, old_status, user_info, was_confirmed)
 
-        result, fallback_channel_id, event_id = await update_status()
+        result, fallback_channel_id, event_id, admin_info = await update_status()
 
         if result == "cancelled":
             cancel_msg = "Confirmação final cancelada." if self.is_reminder else "Participação cancelada."
@@ -664,6 +725,25 @@ class ConfirmView(discord.ui.View):
                 await update_announcement_message(interaction.client, event_id)
             except Exception as e:
                 logger.warning(f"Failed to update announcement message: {e}")
+        
+        # Send admin notification about cancellation (only if previously confirmed/locked)
+        if result == "cancelled" and admin_info:
+            try:
+                event_name, old_status, user_info, was_confirmed = admin_info
+                if was_confirmed:
+                    admin_msg = (
+                        f"❌ **Participação Cancelada**\n\n"
+                        f"👤 **Controlador:** {user_info['username']} (CID: {user_info['cid']}) - {user_info['rating']}\n"
+                        f"🎉 **Evento:** {event_name}\n"
+                        f"📍 **Posição:** {user_info['position']}\n"
+                        f"⏰ **Bloco:** {user_info['block']}\n"
+                        f"📌 **Status Anterior:** {old_status}"
+                    )
+                    notifications_cog = interaction.client.get_cog("NotificationsCog")
+                    if notifications_cog:
+                        await notifications_cog.send_admin_notification(admin_msg, event_name)
+            except Exception as e:
+                logger.warning(f"Failed to send admin notification: {e}")
         
         # Delete the fallback channel if this cancellation was in one
         if fallback_channel_id and interaction.channel:
