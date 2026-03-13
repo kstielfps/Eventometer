@@ -191,7 +191,7 @@ class AdminNotificationDeleteView(discord.ui.View):
         self.channel_id = channel_id
 
     @discord.ui.button(label="✓ Confirmar Leitura", style=discord.ButtonStyle.green)
-    async def delete_message(self, interaction: discord.Interaction):
+    async def delete_message(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Delete the notification message and optionally the channel."""
         # Always defer first to acknowledge the interaction
         await interaction.response.defer(ephemeral=True)
