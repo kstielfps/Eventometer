@@ -110,7 +110,9 @@ MSGS = {
 LABELS = {
     "btn_book": "📋 Aplicar para Posição",
     "btn_confirm": "✅ Confirmar Participação",
+    "btn_cancel_confirm": "❌ Cancelar Participação",
     "btn_final_confirm": "✅ Confirmação Final",
+    "btn_cancel_final": "❌ Cancelar Confirmação",
     "btn_revoke": "🗑️ Revogar Aplicações",
     "select_event_placeholder": "Escolha um evento...",
     "select_blocks_placeholder": "Selecione os blocos de horário...",

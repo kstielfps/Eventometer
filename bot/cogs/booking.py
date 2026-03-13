@@ -528,22 +528,33 @@ class PositionSelectView(discord.ui.View):
 
 
 class ConfirmView(discord.ui.View):
-    """View with a Confirm button sent via DM after admin locks a position."""
+    """View with Confirm and Cancel buttons sent via DM after admin locks a position."""
 
     def __init__(self, application_id: int, is_reminder: bool = False):
         super().__init__(timeout=None)  # Persistent view
         self.application_id = application_id
+        self.is_reminder = is_reminder
 
-        label = LABELS["btn_final_confirm"] if is_reminder else LABELS["btn_confirm"]
-        custom_id = f"confirm_{application_id}"
+        confirm_label = LABELS["btn_final_confirm"] if is_reminder else LABELS["btn_confirm"]
+        cancel_label = LABELS["btn_cancel_final"] if is_reminder else LABELS["btn_cancel_confirm"]
+        custom_id_confirm = f"confirm_{application_id}"
+        custom_id_cancel = f"cancel_{application_id}"
 
-        button = discord.ui.Button(
-            label=label,
+        confirm_button = discord.ui.Button(
+            label=confirm_label,
             style=discord.ButtonStyle.success,
-            custom_id=custom_id,
+            custom_id=custom_id_confirm,
         )
-        button.callback = self.on_confirm
-        self.add_item(button)
+        confirm_button.callback = self.on_confirm
+        self.add_item(confirm_button)
+
+        cancel_button = discord.ui.Button(
+            label=cancel_label,
+            style=discord.ButtonStyle.danger,
+            custom_id=custom_id_cancel,
+        )
+        cancel_button.callback = self.on_cancel
+        self.add_item(cancel_button)
 
     async def on_confirm(self, interaction: discord.Interaction):
         from core.models import BookingApplication, ApplicationStatus
@@ -603,6 +614,65 @@ class ConfirmView(discord.ui.View):
             except Exception as e:
                 import logging
                 logger = logging.getLogger("bot.booking")
+                logger.error(f"Failed to delete fallback channel: {e}")
+
+    async def on_cancel(self, interaction: discord.Interaction):
+        from core.models import BookingApplication, ApplicationStatus
+
+        @sync_to_async
+        def update_status():
+            try:
+                app = BookingApplication.objects.get(pk=self.application_id)
+            except BookingApplication.DoesNotExist:
+                return None, None, None
+
+            fallback_channel_id = app.fallback_channel_id
+            event_id = app.event_position.event_icao.event_id
+
+            if app.status == ApplicationStatus.LOCKED:
+                app.status = ApplicationStatus.CANCELLED
+                app.fallback_channel_id = None
+                app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
+                return "cancelled", fallback_channel_id, event_id
+            elif app.status == ApplicationStatus.CONFIRMED:
+                app.status = ApplicationStatus.CANCELLED
+                app.fallback_channel_id = None
+                app.save(update_fields=["status", "fallback_channel_id", "updated_at"])
+                return "cancelled", fallback_channel_id, event_id
+            return "already", fallback_channel_id, event_id
+
+        result, fallback_channel_id, event_id = await update_status()
+
+        if result == "cancelled":
+            cancel_msg = "Confirmação final cancelada." if self.is_reminder else "Participação cancelada."
+            await interaction.response.edit_message(
+                content=f"❌ {cancel_msg}\n\nVocê pode se aplicar novamente no evento se desejar.",
+                view=None
+            )
+        elif result == "already":
+            await interaction.response.edit_message(
+                content="⚠️ Este cancelamento já foi processado.",
+                view=None,
+            )
+        else:
+            await interaction.response.edit_message(content=MSGS["err_generic"], view=None)
+        
+        # Update the announcement message if result was successful
+        if result == "cancelled" and event_id:
+            try:
+                from bot.cogs.admin_cmds import update_announcement_message
+                await update_announcement_message(interaction.client, event_id)
+            except Exception as e:
+                logger.warning(f"Failed to update announcement message: {e}")
+        
+        # Delete the fallback channel if this cancellation was in one
+        if fallback_channel_id and interaction.channel:
+            try:
+                if str(interaction.channel.id) == fallback_channel_id:
+                    await interaction.channel.send("❌ Cancelamento recebido! Este canal será deletado em 5 segundos...")
+                    await asyncio.sleep(5)
+                    await interaction.channel.delete(reason="Cancelamento recebido via canal de fallback")
+            except Exception as e:
                 logger.error(f"Failed to delete fallback channel: {e}")
 
 
