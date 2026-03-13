@@ -191,7 +191,7 @@ class AdminNotificationDeleteView(discord.ui.View):
         self.channel_id = channel_id
 
     @discord.ui.button(label="✓ Confirmar Leitura", style=discord.ButtonStyle.green)
-    async def delete_message(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def delete_message(self, interaction: discord.Interaction):
         """Delete the notification message and optionally the channel."""
         try:
             await interaction.message.delete()
@@ -205,7 +205,10 @@ class AdminNotificationDeleteView(discord.ui.View):
                 await interaction.response.defer(ephemeral=True)
         except Exception as e:
             logger.error(f"Failed to delete admin notification message: {e}")
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except:
+                pass
 
 
 class NotificationsCog(commands.Cog):
