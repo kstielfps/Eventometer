@@ -2020,6 +2020,75 @@ class AdminCog(commands.Cog):
             ephemeral=True,
         )
 
+    @discord.slash_command(
+        name="limpar_fallback",
+        description="[Admin] Deletar TODOS os canais de fallback na categoria",
+    )
+    @is_admin()
+    async def limpar_fallback(self, ctx: discord.ApplicationContext):
+        """Delete all fallback channels in the fallback category."""
+        await ctx.defer(ephemeral=True)
+
+        from decouple import config
+
+        try:
+            guild_id = int(config("DISCORD_GUILD_ID", default=0))
+            category_id = int(config("DISCORD_FALLBACK_CATEGORY_ID", default=0))
+
+            if not guild_id or not category_id:
+                await ctx.respond(
+                    "❌ Configuração incompleta: DISCORD_GUILD_ID ou DISCORD_FALLBACK_CATEGORY_ID não definidas.",
+                    ephemeral=True,
+                )
+                return
+
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                await ctx.respond(f"❌ Guild com ID {guild_id} não encontrada.", ephemeral=True)
+                return
+
+            category = guild.get_channel(category_id)
+            if not category:
+                await ctx.respond(
+                    f"❌ Categoria de fallback com ID {category_id} não encontrada.",
+                    ephemeral=True,
+                )
+                return
+
+            # Get all text channels in the category
+            channels_to_delete = list(category.text_channels)
+
+            if not channels_to_delete:
+                await ctx.respond(
+                    f"ℹ️ Nenhum canal de fallback encontrado na categoria **{category.name}**.",
+                    ephemeral=True,
+                )
+                return
+
+            # Delete all channels
+            deleted_count = 0
+            failed_count = 0
+
+            for channel in channels_to_delete:
+                try:
+                    await channel.delete(reason="Limpeza de canais de fallback por admin")
+                    deleted_count += 1
+                    logger.info(f"Deleted fallback channel #{channel.name}")
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Failed to delete fallback channel #{channel.name}: {e}")
+
+            response = f"✅ **Canais de Fallback Deletados**\n\n"
+            response += f"📊 **Canais deletados:** {deleted_count}\n"
+            if failed_count > 0:
+                response += f"⚠️ **Falhas:** {failed_count}\n"
+
+            await ctx.respond(response, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"Error cleaning fallback channels: {e}", exc_info=True)
+            await ctx.respond(f"❌ Erro ao limpar canais: {str(e)}", ephemeral=True)
+
 
 class AddPositionView(discord.ui.View):
     """Interactive view to add positions to ICAOs."""
