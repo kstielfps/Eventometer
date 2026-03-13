@@ -8,6 +8,7 @@ Handles:
 - Rejection notifications (position filled, user not selected)
 """
 
+import asyncio
 import logging
 
 import discord
@@ -182,6 +183,31 @@ def get_admin_discord_ids():
     )
 
 
+class AdminNotificationDeleteView(discord.ui.View):
+    """View with a delete button for admin notification messages."""
+
+    def __init__(self, channel_id: str | None = None):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+
+    @discord.ui.button(label="✓ Confirmar Leitura", style=discord.ButtonStyle.green)
+    async def delete_message(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Delete the notification message and optionally the channel."""
+        try:
+            await interaction.message.delete()
+            
+            # If this was sent in a fallback admin channel, delete the channel after confirmation
+            if self.channel_id and str(interaction.channel.id) == self.channel_id:
+                await interaction.channel.send("Deletando este canal em 2 segundos...")
+                await asyncio.sleep(2)
+                await interaction.channel.delete(reason="Admin confirmou notificação")
+            else:
+                await interaction.response.defer(ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to delete admin notification message: {e}")
+            await interaction.response.defer(ephemeral=True)
+
+
 class NotificationsCog(commands.Cog):
     """Background task that sends Discord DMs for booking notifications."""
 
@@ -199,6 +225,114 @@ class NotificationsCog(commands.Cog):
 
     def cog_unload(self):
         self.check_notifications.cancel()
+
+    async def send_admin_notification(self, message: str, event_name: str = "Evento"):
+        """
+        Send a notification to all admins via DM.
+        If DM fails, send to a fallback Admin Notifications channel.
+        
+        Args:
+            message: The notification message to send
+            event_name: Name of the event for the fallback channel topic
+        """
+        admin_ids = await get_admin_discord_ids()
+        if not admin_ids:
+            logger.warning("No admins configured to receive notifications")
+            return
+
+        view = AdminNotificationDeleteView()
+        fallback_channel = None
+        failed_admins = []
+
+        for admin_id in admin_ids:
+            try:
+                admin_user = await self.bot.fetch_user(int(admin_id))
+                await admin_user.send(content=message, view=view)
+                logger.info(f"Sent admin notification to {admin_user}")
+            except (discord.Forbidden, discord.HTTPException) as e:
+                logger.warning(f"Could not DM admin {admin_id}: {e}")
+                failed_admins.append(admin_id)
+            except Exception as e:
+                logger.error(f"Error sending DM to admin {admin_id}: {e}")
+                failed_admins.append(admin_id)
+
+        # If some DMs failed, send to fallback channel
+        if failed_admins:
+            try:
+                fallback_channel = await self._create_admin_fallback_channel(event_name, admin_ids)
+                if fallback_channel:
+                    view_with_channel = AdminNotificationDeleteView(channel_id=str(fallback_channel.id))
+                    await fallback_channel.send(content=message, view=view_with_channel)
+                    logger.info(f"Sent admin notification to fallback channel #{fallback_channel.name}")
+            except Exception as e:
+                logger.error(f"Failed to send admin notification to fallback channel: {e}")
+
+    async def _create_admin_fallback_channel(self, event_name: str, admin_ids: list[str]) -> discord.TextChannel | None:
+        """Create or get a fallback channel for admin notifications."""
+        from decouple import config
+
+        try:
+            guild_id = int(config("DISCORD_GUILD_ID", default=0))
+            category_id = int(config("DISCORD_FALLBACK_CATEGORY_ID", default=0))
+
+            if not guild_id or not category_id:
+                logger.error("DISCORD_GUILD_ID or DISCORD_FALLBACK_CATEGORY_ID not configured!")
+                return None
+
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                logger.error(f"Could not find guild with ID {guild_id}")
+                return None
+
+            category = guild.get_channel(category_id)
+            if not category:
+                logger.error(f"Could not find category with ID {category_id}")
+                return None
+
+            # Check for existing admin notification channel
+            channel_name = f"admin-notificações-{event_name}".lower().replace(" ", "-")[:32]
+            for channel in category.text_channels:
+                if channel.name == channel_name:
+                    return channel
+
+            # Check bot permissions
+            bot_permissions = category.permissions_for(guild.me)
+            if not bot_permissions.manage_channels:
+                logger.error(
+                    f"Bot lacks 'Manage Channels' permission in category '{category.name}'. "
+                    f"Cannot create admin fallback channel."
+                )
+                return None
+
+            # Set up permissions - admins and bot only
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            }
+
+            # Add permissions for each admin
+            for admin_id in admin_ids:
+                admin_member = guild.get_member(int(admin_id))
+                if admin_member:
+                    overwrites[admin_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+            # Create the channel
+            channel = await guild.create_text_channel(
+                name=channel_name,
+                category=category,
+                overwrites=overwrites,
+                topic=f"Notificações de Admin - {event_name}"
+            )
+
+            logger.info(f"Created admin fallback channel #{channel.name} (ID: {channel.id})")
+            return channel
+
+        except discord.errors.Forbidden as e:
+            logger.error(f"Permission error creating admin fallback channel: {e}")
+        except Exception as e:
+            logger.error(f"Failed to create admin fallback channel: {e}", exc_info=True)
+        
+        return None
 
     @tasks.loop(seconds=30)
     async def check_notifications(self):
