@@ -1628,48 +1628,52 @@ class AdminCog(commands.Cog):
 
     @discord.slash_command(name="adicionar_posicao", description="[Admin] Adicionar posições aos ICAOs de um evento")
     @is_admin()
-    async def adicionar_posicao(
-        self,
-        ctx: discord.ApplicationContext,
-        event_id: discord.Option(int, description="ID do evento VATSIM", required=True),
-    ):
+    async def adicionar_posicao(self, ctx: discord.ApplicationContext):
         """Add positions to event ICAOs through an interactive interface."""
         await ctx.defer(ephemeral=True)
         
         try:
-            event = await get_event_by_vatsim_id(event_id)
-            if not event:
+            events = await get_active_events()
+            if not events:
                 await ctx.respond(
-                    f"❌ Evento {event_id} não encontrado.",
+                    "Eventos arquivados ou com data/hora passada não são exibidos.",
                     ephemeral=True,
                 )
                 return
-            
-            # Get ICAOs for this event
-            icaos = await get_event_icaos(event.pk)
-            if not icaos:
-                await ctx.respond(
-                    f"❌ Nenhum ICAO configurado para este evento.\n"
-                    f"Use `/adicionar_icao event_id:{event_id} icaos:SBBR,SBGR` primeiro.",
+
+            async def show_position_ui(interaction: discord.Interaction, event: Event):
+                # Get ICAOs for this event
+                icaos = await get_event_icaos(event.pk)
+                if not icaos:
+                    await interaction.response.send_message(
+                        f"❌ Nenhum ICAO configurado para este evento.\n"
+                        f"Use `/adicionar_icao` primeiro.",
+                        ephemeral=True,
+                    )
+                    return
+                
+                # Get position templates
+                templates = await get_position_templates()
+                if not templates:
+                    await interaction.response.send_message(
+                        "❌ Nenhum template de posição disponível.\n"
+                        "Configure-os no Django Admin primeiro.",
+                        ephemeral=True,
+                    )
+                    return
+                
+                # Show selection UI
+                view = AddPositionView(event, icaos, templates)
+                await interaction.response.send_message(
+                    f"🎯 **Adicionar posições para: {event.name}**\n\n"
+                    f"Selecione o ICAO e depois as posições que deseja adicionar:",
+                    view=view,
                     ephemeral=True,
                 )
-                return
-            
-            # Get position templates
-            templates = await get_position_templates()
-            if not templates:
-                await ctx.respond(
-                    "❌ Nenhum template de posição disponível.\n"
-                    "Configure-os no Django Admin primeiro.",
-                    ephemeral=True,
-                )
-                return
-            
-            # Show selection UI
-            view = AddPositionView(event, icaos, templates)
+
+            view = EventSelectionView(events, show_position_ui)
             await ctx.respond(
-                f"🎯 **Adicionar posições para: {event.name}**\n\n"
-                f"Selecione o ICAO e depois as posições que deseja adicionar:",
+                "🎯 **Selecione o evento para adicionar posições:**",
                 view=view,
                 ephemeral=True,
             )
