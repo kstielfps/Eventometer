@@ -853,11 +853,10 @@ class EventSelectionView(discord.ui.View):
         self.add_item(select)
 
     async def on_select(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         event_id = int(interaction.data["values"][0])
         event = await get_event(event_id)
         if not event:
-            await interaction.followup.send("❌ Evento não encontrado.", ephemeral=True)
+            await interaction.response.send_message("❌ Evento não encontrado.", ephemeral=True)
             return
         await self.callback_func(interaction, event)
 
