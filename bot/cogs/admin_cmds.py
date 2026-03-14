@@ -1764,6 +1764,8 @@ class AdminCog(commands.Cog):
             return
 
         async def show_applications(interaction: discord.Interaction, event: Event):
+            await interaction.response.defer(ephemeral=True)
+            
             all_apps = await get_all_applications_for_event(event.pk)
             if not all_apps:
                 await interaction.followup.send(
@@ -1861,6 +1863,8 @@ class AdminCog(commands.Cog):
             return
 
         async def show_selection_flow(interaction: discord.Interaction, event: Event):
+            await interaction.response.defer(ephemeral=True)
+            
             positions = await get_positions_with_pending_apps(event.pk)
             if not positions:
                 await interaction.followup.send(
